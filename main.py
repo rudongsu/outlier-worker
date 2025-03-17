@@ -86,7 +86,7 @@ def check_remaining_tasks(session, headers):
     tasks_headers = headers.copy()
     tasks_headers.update({
         "Accept": "application/json",
-        "Accept-Encoding": "gzip, deflate, br",
+        "Accept-Encoding": "gzip, deflate",  # Remove br from accepted encodings
         "Content-Type": "application/json",
         "Sec-Fetch-Site": "same-origin",
         "Sec-Fetch-Mode": "cors",
@@ -110,80 +110,97 @@ def check_remaining_tasks(session, headers):
         
         print("Request URL:", response.url)
         print("Response status:", response.status_code)
-        
-        # Handle different content encodings
-        content = response.content
-        if response.headers.get('Content-Encoding') == 'br':
-            import brotli
-            content = brotli.decompress(content)
-        
-        # Try to decode the content
+        print("Response headers:", dict(response.headers))
+
+        # Try to get raw content first
         try:
-            text_content = content.decode('utf-8')
-            print("Raw response content:", text_content[:200])
-            
-            if not text_content:
-                print("Empty response received")
-                return
-                
-            data = json.loads(text_content)
-            print("Successfully parsed JSON response")
-            
-            # Update web interface with new counts
+            content = response.content
+            encoding = response.headers.get('Content-Encoding', '')
+            print(f"Content encoding: {encoding}")
+
+            if (encoding == 'br'):
+                import brotli
+                try:
+                    content = brotli.decompress(content)
+                except Exception as be:
+                    print(f"Brotli decompression failed: {be}")
+                    # Try using raw content instead
+                    content = response.content
+            elif (encoding == 'gzip'):
+                import gzip
+                try:
+                    content = gzip.decompress(content)
+                except Exception as ge:
+                    print(f"Gzip decompression failed: {ge}")
+                    content = response.content
+
+            # Try to decode the content
             try:
-                web_app_url = os.getenv('WEB_APP_URL')
-                if not web_app_url:
-                    print("WEB_APP_URL environment variable not set")
+                text_content = content.decode('utf-8')
+                print("Raw response content:", text_content[:200])
+                
+                if not text_content:
+                    print("Empty response received")
                     return
                     
-                update_url = f"{web_app_url.rstrip('/')}/update_counts"
-                print(f"Updating web interface at: {update_url}")
+                data = json.loads(text_content)
+                print("Successfully parsed JSON response")
                 
-                response = requests.post(update_url, json=data)
-                if response.status_code == 200:
-                    print("Successfully updated web interface")
-                else:
-                    print(f"Failed to update web interface: {response.status_code}")
-            except Exception as e:
-                print(f"Failed to update web interface: {e}")
-
-            # Check for projects with remaining tasks
-            projects_with_tasks = [
-                project for project in data
-                if project["count"] > 0
-            ]
-            
-            if projects_with_tasks:
-                if should_send_email():
-                    projects_info = "\n".join([
-                        f"Project: {project_map[p['projectId']]['name']}\n"
-                        f"Project ID: {p['projectId']}\n"
-                        f"Remaining Tasks: {p['count']}\n"
-                        for p in projects_with_tasks
-                    ])
-                    
-                    subject = "Projects With Remaining Tasks Available!"
-                    body = f"Found {len(projects_with_tasks)} projects with tasks:\n\n{projects_info}"
-                    send_email(subject, body)
-                    
-                    # Update last email sent time for all projects
-                    now = datetime.now()
-                    for project in projects_with_tasks:
-                        LAST_EMAIL_SENT[project['projectId']] = now
+                # Update web interface with new counts
+                try:
+                    web_app_url = os.getenv('WEB_APP_URL')
+                    if not web_app_url:
+                        print("WEB_APP_URL environment variable not set")
+                        return
                         
-                    print(f"Found {len(projects_with_tasks)} projects with tasks and sent email notification!")
-                else:
-                    print("Found projects with tasks but outside email notification hours")
-            else:
-                print("No projects with remaining tasks.")
+                    update_url = f"{web_app_url.rstrip('/')}/update_counts"
+                    print(f"Updating web interface at: {update_url}")
+                    
+                    response = requests.post(update_url, json=data)
+                    if response.status_code == 200:
+                        print("Successfully updated web interface")
+                    else:
+                        print(f"Failed to update web interface: {response.status_code}")
+                except Exception as e:
+                    print(f"Failed to update web interface: {e}")
+
+                # Check for projects with remaining tasks
+                projects_with_tasks = [
+                    project for project in data
+                    if project["count"] > 0
+                ]
                 
-        except requests.exceptions.JSONDecodeError as e:
-            print(f"Failed to parse JSON response: {str(e)}")
-            print("Status code:", response.status_code)
-            print("Response headers:", dict(response.headers))
-            print("Raw response content:", response.content[:200].hex())
-    except requests.exceptions.RequestException as e:
-        print(f"Request failed: {str(e)}")
+                if projects_with_tasks:
+                    if should_send_email():
+                        projects_info = "\n".join([
+                            f"Project: {project_map[p['projectId']]['name']}\n"
+                            f"Project ID: {p['projectId']}\n"
+                            f"Remaining Tasks: {p['count']}\n"
+                            for p in projects_with_tasks
+                        ])
+                        
+                        subject = "Projects With Remaining Tasks Available!"
+                        body = f"Found {len(projects_with_tasks)} projects with tasks:\n\n{projects_info}"
+                        send_email(subject, body)
+                        
+                        # Update last email sent time for all projects
+                        now = datetime.now()
+                        for project in projects_with_tasks:
+                            LAST_EMAIL_SENT[project['projectId']] = now
+                            
+                        print(f"Found {len(projects_with_tasks)} projects with tasks and sent email notification!")
+                    else:
+                        print("Found projects with tasks but outside email notification hours")
+                else:
+                    print("No projects with remaining tasks.")
+                    
+            except requests.exceptions.JSONDecodeError as e:
+                print(f"Failed to parse JSON response: {str(e)}")
+                print("Status code:", response.status_code)
+                print("Response headers:", dict(response.headers))
+                print("Raw response content:", response.content[:200].hex())
+        except requests.exceptions.RequestException as e:
+            print(f"Request failed: {str(e)}")
 
 def send_email(subject, body):
     """Send an email notification using SendGrid."""
