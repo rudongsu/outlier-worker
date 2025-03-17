@@ -201,7 +201,8 @@ def check_remaining_tasks(session, headers):
                 print("Raw response content:", response.content[:200].hex())
         except requests.exceptions.RequestException as e:
             print(f"Request failed: {str(e)}")
-
+    except Exception as e:
+                    print(f"Failed to update web interface: {e}")
 def send_email(subject, body):
     """Send an email notification using SendGrid."""
     message = Mail(
