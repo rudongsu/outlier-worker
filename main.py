@@ -110,74 +110,78 @@ def check_remaining_tasks(session, headers):
         
         print("Request URL:", response.url)
         print("Response status:", response.status_code)
-        print("Raw response content:", response.text[:200])
-
-        if response.status_code == 200:
+        
+        # Handle different content encodings
+        content = response.content
+        if response.headers.get('Content-Encoding') == 'br':
+            import brotli
+            content = brotli.decompress(content)
+        
+        # Try to decode the content
+        try:
+            text_content = content.decode('utf-8')
+            print("Raw response content:", text_content[:200])
+            
+            if not text_content:
+                print("Empty response received")
+                return
+                
+            data = json.loads(text_content)
+            print("Successfully parsed JSON response")
+            
+            # Update web interface with new counts
             try:
-                if not response.text:
-                    print("Empty response received")
+                web_app_url = os.getenv('WEB_APP_URL')
+                if not web_app_url:
+                    print("WEB_APP_URL environment variable not set")
                     return
                     
-                data = response.json()
-                print("Successfully parsed JSON response")
+                update_url = f"{web_app_url.rstrip('/')}/update_counts"
+                print(f"Updating web interface at: {update_url}")
                 
-                # Update web interface with new counts
-                try:
-                    web_app_url = os.getenv('WEB_APP_URL')
-                    if not web_app_url:
-                        print("WEB_APP_URL environment variable not set")
-                        return
-                        
-                    update_url = f"{web_app_url.rstrip('/')}/update_counts"
-                    print(f"Updating web interface at: {update_url}")
-                    
-                    response = requests.post(update_url, json=data)
-                    if response.status_code == 200:
-                        print("Successfully updated web interface")
-                    else:
-                        print(f"Failed to update web interface: {response.status_code}")
-                except Exception as e:
-                    print(f"Failed to update web interface: {e}")
-
-                # Check for projects with remaining tasks
-                projects_with_tasks = [
-                    project for project in data
-                    if project["count"] > 0
-                ]
-                
-                if projects_with_tasks:
-                    if should_send_email():
-                        projects_info = "\n".join([
-                            f"Project: {project_map[p['projectId']]['name']}\n"
-                            f"Project ID: {p['projectId']}\n"
-                            f"Remaining Tasks: {p['count']}\n"
-                            for p in projects_with_tasks
-                        ])
-                        
-                        subject = "Projects With Remaining Tasks Available!"
-                        body = f"Found {len(projects_with_tasks)} projects with tasks:\n\n{projects_info}"
-                        send_email(subject, body)
-                        
-                        # Update last email sent time for all projects
-                        now = datetime.now()
-                        for project in projects_with_tasks:
-                            LAST_EMAIL_SENT[project['projectId']] = now
-                            
-                        print(f"Found {len(projects_with_tasks)} projects with tasks and sent email notification!")
-                    else:
-                        print("Found projects with tasks but outside email notification hours")
+                response = requests.post(update_url, json=data)
+                if response.status_code == 200:
+                    print("Successfully updated web interface")
                 else:
-                    print("No projects with remaining tasks.")
+                    print(f"Failed to update web interface: {response.status_code}")
+            except Exception as e:
+                print(f"Failed to update web interface: {e}")
+
+            # Check for projects with remaining tasks
+            projects_with_tasks = [
+                project for project in data
+                if project["count"] > 0
+            ]
+            
+            if projects_with_tasks:
+                if should_send_email():
+                    projects_info = "\n".join([
+                        f"Project: {project_map[p['projectId']]['name']}\n"
+                        f"Project ID: {p['projectId']}\n"
+                        f"Remaining Tasks: {p['count']}\n"
+                        for p in projects_with_tasks
+                    ])
                     
-            except requests.exceptions.JSONDecodeError as e:
-                print(f"Failed to parse JSON response: {str(e)}")
-                print("Status code:", response.status_code)
-                print("Response headers:", dict(response.headers))
-                print("Raw response content:", response.content[:200].hex())
-        else:
-            print(f"Failed to access remaining tasks endpoint: {response.status_code}")
-            print("Headers:", dict(response.headers))
-            print("Response:", response.text)
+                    subject = "Projects With Remaining Tasks Available!"
+                    body = f"Found {len(projects_with_tasks)} projects with tasks:\n\n{projects_info}"
+                    send_email(subject, body)
+                    
+                    # Update last email sent time for all projects
+                    now = datetime.now()
+                    for project in projects_with_tasks:
+                        LAST_EMAIL_SENT[project['projectId']] = now
+                        
+                    print(f"Found {len(projects_with_tasks)} projects with tasks and sent email notification!")
+                else:
+                    print("Found projects with tasks but outside email notification hours")
+            else:
+                print("No projects with remaining tasks.")
+                
+        except requests.exceptions.JSONDecodeError as e:
+            print(f"Failed to parse JSON response: {str(e)}")
+            print("Status code:", response.status_code)
+            print("Response headers:", dict(response.headers))
+            print("Raw response content:", response.content[:200].hex())
     except requests.exceptions.RequestException as e:
         print(f"Request failed: {str(e)}")
 
