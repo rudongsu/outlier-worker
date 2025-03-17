@@ -12,7 +12,8 @@ import schedule
 import threading
 import sys
 import signal
-from datetime import datetime, time as datetime_time, timedelta  # Add timedelta here too
+from datetime import datetime, time as datetime_time, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 # Project names to monitor
 MONITORED_PROJECTS = [
@@ -39,6 +40,7 @@ TO_EMAIL = os.getenv("TO_EMAIL")
 # Create SendGrid client instance
 sg_client = SendGridAPIClient(SENDGRID_API_KEY)
 
+TIMEZONE_ACST = ZoneInfo("Australia/Adelaide")
 WORK_HOURS_START = datetime_time(9, 0)  # 9:00 AM ACST
 WORK_HOURS_END = datetime_time(17, 30)  # 5:30 PM ACST
 NIGHT_HOURS_END = datetime_time(23, 59)  # 11:59 PM ACST
@@ -46,27 +48,37 @@ EMAIL_COOLDOWN_MINUTES = 60  # Send emails every hour during allowed hours
 LAST_EMAIL_SENT = {}  # Track last email time per project
 
 def should_send_email():
-    """Check if we should send an email based on time of day."""
-    now = datetime.now()
+    """Check if we should send an email based on time of day in ACST."""
+    # Get current time in ACST
+    now = datetime.now(TIMEZONE_ACST)
     current_time = now.time()
+    
+    print(f"Current ACST time: {now.strftime('%Y-%m-%d %H:%M:%S %Z')}")
     
     # Don't send emails on weekends
     if now.weekday() >= 5:  # 5 = Saturday, 6 = Sunday
+        print("Weekend - no emails")
         return False
         
     # Don't send during work hours
     if WORK_HOURS_START <= current_time <= WORK_HOURS_END:
+        print("Work hours - no emails")
         return False
         
     # Only send between work hours end and night hours end
     if WORK_HOURS_END <= current_time <= NIGHT_HOURS_END:
         # Check cooldown period
         for project_id, last_sent in LAST_EMAIL_SENT.items():
+            # Convert last_sent to ACST if it's naive
+            if last_sent.tzinfo is None:
+                last_sent = last_sent.replace(tzinfo=TIMEZONE_ACST)
+            
             if (now - last_sent).total_seconds() < EMAIL_COOLDOWN_MINUTES * 60:
                 print(f"Email cooldown active until {last_sent + timedelta(minutes=EMAIL_COOLDOWN_MINUTES)}")
                 return False
         return True
         
+    print("Outside allowed hours (5:30 PM - 11:59 PM ACST)")
     return False
 
 def load_project_ids():
