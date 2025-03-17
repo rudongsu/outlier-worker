@@ -13,7 +13,7 @@ import threading
 import sys
 import signal
 from datetime import datetime, time as datetime_time, timedelta, timezone
-from zoneinfo import ZoneInfo
+import pytz  # Add this import instead of zoneinfo
 
 # Project names to monitor
 MONITORED_PROJECTS = [
@@ -40,12 +40,35 @@ TO_EMAIL = os.getenv("TO_EMAIL")
 # Create SendGrid client instance
 sg_client = SendGridAPIClient(SENDGRID_API_KEY)
 
-TIMEZONE_ACST = ZoneInfo("Australia/Adelaide")
+TIMEZONE_ACST = pytz.timezone('Australia/Adelaide')
 WORK_HOURS_START = datetime_time(9, 0)  # 9:00 AM ACST
 WORK_HOURS_END = datetime_time(17, 30)  # 5:30 PM ACST
 NIGHT_HOURS_END = datetime_time(23, 59)  # 11:59 PM ACST
 EMAIL_COOLDOWN_MINUTES = 60  # Send emails every hour during allowed hours
+EMAIL_STATE_FILE = 'email_state.json'  # New file to track email states
 LAST_EMAIL_SENT = {}  # Track last email time per project
+
+def load_email_state():
+    """Load the last email sent times from file."""
+    try:
+        if os.path.exists(EMAIL_STATE_FILE):
+            with open(EMAIL_STATE_FILE, 'r') as f:
+                state = json.load(f)
+                return {k: datetime.fromisoformat(v) for k, v in state.items()}
+        return {}
+    except Exception as e:
+        print(f"Error loading email state: {e}")
+        return {}
+
+def save_email_state(state):
+    """Save the email state to file."""
+    try:
+        with open(EMAIL_STATE_FILE, 'w') as f:
+            # Convert datetime objects to ISO format strings
+            state_dict = {k: v.isoformat() for k, v in state.items()}
+            json.dump(state_dict, f)
+    except Exception as e:
+        print(f"Error saving email state: {e}")
 
 def should_send_email():
     """Check if we should send an email based on time of day in ACST."""
@@ -67,9 +90,11 @@ def should_send_email():
         
     # Only send between work hours end and night hours end
     if WORK_HOURS_END <= current_time <= NIGHT_HOURS_END:
-        # Check cooldown period
-        for project_id, last_sent in LAST_EMAIL_SENT.items():
-            # Convert last_sent to ACST if it's naive
+        # Load last email times
+        last_email_times = load_email_state()
+        
+        # Check cooldown period for any project
+        for project_id, last_sent in last_email_times.items():
             if last_sent.tzinfo is None:
                 last_sent = last_sent.replace(tzinfo=TIMEZONE_ACST)
             
@@ -195,11 +220,13 @@ def check_remaining_tasks(session, headers):
                         body = f"Found {len(projects_with_tasks)} projects with tasks:\n\n{projects_info}"
                         send_email(subject, body)
                         
-                        # Update last email sent time for all projects
-                        now = datetime.now()
+                        # Update and save email state
+                        now = datetime.now(TIMEZONE_ACST)
+                        email_state = load_email_state()
                         for project in projects_with_tasks:
-                            LAST_EMAIL_SENT[project['projectId']] = now
-                            
+                            email_state[project['projectId']] = now
+                        save_email_state(email_state)
+                        
                         print(f"Found {len(projects_with_tasks)} projects with tasks and sent email notification!")
                     else:
                         print("Found projects with tasks but outside email notification hours")
